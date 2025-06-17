@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'weather',
     'rest_framework',
+    'report',
 ]
 
 MIDDLEWARE = [
@@ -121,6 +122,18 @@ USE_I18N = True
 USE_TZ = False
 
 
+
+# your_project_name/settings.py
+
+import os
+
+# ... existing settings ...
+
+# Define MEDIA_ROOT to point to your 'images' directory
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'images') # Assuming 'images' is in your project root
+
+# ... rest of your settings ...
 
 
 # Static files (CSS, JavaScript, Images)
