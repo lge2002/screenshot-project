@@ -3,7 +3,8 @@
 from django.shortcuts import render
 import os
 from django.conf import settings
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time # NEW: Import time
+import pytz # NEW: For timezone awareness
 
 # --- Import your actual CloudAnalysis model ---
 from weather.models import CloudAnalysis 
@@ -39,12 +40,14 @@ FINAL_MAX_LAT = 13.53
 
 def report_view(request):
     selected_date_str = request.GET.get('date')
-    # --- IMPORTANT FIX: Handle empty district selection ---
-    # If the district parameter is missing or empty string, treat it as 'All Districts'
     selected_district = request.GET.get('district', 'All Districts')
     if selected_district == "" or selected_district is None:
         selected_district = "All Districts"
-    # --- END IMPORTANT FIX ---
+
+    # --- NEW: Get time filter parameters ---
+    selected_start_time_str = request.GET.get('start_time')
+    selected_end_time_str = request.GET.get('end_time')
+    # --- END NEW ---
 
     selected_image_view = request.GET.get('image_view_type', '') 
 
@@ -63,6 +66,7 @@ def report_view(request):
 
     # --- DEBUGGING PRINTS ---
     print(f"\n--- Generating Images for Date: {target_date_display_str}, District: {selected_district}, Image View: {selected_image_view} ---")
+    print(f"Time Range: {selected_start_time_str} - {selected_end_time_str}") # NEW DEBUG PRINT
     print(f"SHAPEFILE_PATH configured as: {SHAPEFILE_PATH}")
     # --- END DEBUGGING PRINTS ---
 
@@ -150,12 +154,11 @@ def report_view(request):
             print(f"Generated Base64 for Cropped TN image.")
 
             # 2. Generate Masked District Image (Logic adjusted for 'All Districts' selected for this view)
-            # This block now correctly handles the 'All Districts' case for masked_coimbatore view
             if selected_image_view == 'masked_coimbatore':
                 if selected_district == 'All Districts':
                     masked_district_image_b64 = cropped_tn_image_b64 
                     print(f"Shape-Masked District view selected with 'All Districts': defaulting to full TN radar image.")
-                else: # Specific district selected
+                else: 
                     district_rows_for_name = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
                     if not district_rows_for_name.empty:
                         all_district_geometries = district_rows_for_name.geometry.to_list()
@@ -233,23 +236,50 @@ def report_view(request):
         'aligned_overlay_tn': aligned_overlay_tn_b64,
     }
 
-    # --- Fetch Cloud Analysis Data from Database (USING CloudAnalysis MODEL) ---
-    # Filter by date part of timestamp
     cloud_analysis_query = CloudAnalysis.objects.filter(
-        timestamp__date=filter_date 
+        timestamp__date=filter_date # Filter by date part of timestamp
     )
 
     if selected_district != 'All Districts':
-        # Filter by specific district name (using 'city' field from your model)
         cloud_analysis_query = cloud_analysis_query.filter(city__iexact=selected_district)
 
-    # Order the results and convert queryset to a list
+
+    current_timezone = pytz.timezone(settings.TIME_ZONE) if settings.USE_TZ else None
+
+
+    if selected_start_time_str:
+        try:
+            start_time = datetime.strptime(selected_start_time_str, '%H:%M').time()
+        except ValueError:
+            start_time = time(0, 0, 0) 
+    else:
+        start_time = time(0, 0, 0)
+
+    if selected_end_time_str:
+        try:
+            end_time = datetime.strptime(selected_end_time_str, '%H:%M').time()
+        except ValueError:
+            end_time = time(23, 59, 59, 999999) 
+    else:
+        end_time = time(23, 59, 59, 999999) 
+
+    start_datetime_filter = datetime.combine(filter_date, start_time)
+    end_datetime_filter = datetime.combine(filter_date, end_time)
+
+    if current_timezone:
+        start_datetime_filter = current_timezone.localize(start_datetime_filter)
+        end_datetime_filter = current_timezone.localize(end_datetime_filter)
+
+    cloud_analysis_query = cloud_analysis_query.filter(
+        timestamp__gte=start_datetime_filter,
+        timestamp__lte=end_datetime_filter
+    )
+
     filtered_cloud_analysis_data = list(cloud_analysis_query.order_by('city', 'timestamp'))
     
     print(f"Fetched {len(filtered_cloud_analysis_data)} weather data points for {target_date_display_str} and {selected_district}.")
 
 
-    # --- Dynamically get available districts from shapefile ---
     full_available_districts = []
     try:
         if not os.path.exists(SHAPEFILE_PATH):
@@ -282,5 +312,7 @@ def report_view(request):
         'available_districts': full_available_districts,
         'cloud_analysis_data': filtered_cloud_analysis_data, 
         'selected_image_view': selected_image_view,
+        'selected_start_time': selected_start_time_str,
+        'selected_end_time': selected_end_time_str,
     }
     return render(request, 'report/report.html', context)
