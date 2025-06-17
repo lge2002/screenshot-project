@@ -1,4 +1,4 @@
-<!-- weather_report.html -->
+<!-- report.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -33,7 +33,7 @@
 
         /* Styling for select and input fields */
         .filter-container select, 
-        .filter-container input[type="date"] { /* Removed input[type="time"] */
+        .filter-container input[type="date"] {
             padding: 0.625rem; /* p-2.5 */
             font-size: 1rem; /* text-base */
             border-radius: 0.375rem; /* rounded-md */
@@ -47,7 +47,8 @@
         
         /* Responsive adjustments for filter inputs */
         @media (min-width: 640px) { /* sm:breakpoint */
-            .filter-container input[type="date"] { /* Removed input[type="time"] */
+            .filter-container input[type="date"],
+            .filter-container select {
                 width: auto; /* Auto width on larger screens */
             }
         }
@@ -79,6 +80,8 @@
             max-width: 1000px; /* Wider for images and data */
             margin-left: auto; 
             margin-right: auto; 
+            /* Initially hidden, will be shown by JS after filter is applied */
+            display: none; 
         }
 
         /* Image display area and item containers */
@@ -97,58 +100,21 @@
             border-radius: 0.5rem; /* rounded-lg */
             background-color: #f9fafb; /* bg-gray-50 */
             box-shadow: 0 2px 4px rgba(0,0,0,0.05); /* shadow-sm */
-            flex: 1 1 45%; /* Flex item to take about half width, adjust for gap */
-            max-width: 45%; 
-            box-sizing: border-box;
+            flex: 1 1 45%; max-width: 45%; box-sizing: border-box; 
         }
-        @media (max-width: 768px) { /* Adjust for smaller screens */
-            .image-item-container {
-                max-width: 90%; /* Stack on small screens */
-                flex: 1 1 90%;
-            }
-        }
-        .image-item-container img { 
-            max-width: 100%; 
-            height: auto; 
-            border-radius: 0.375rem; /* rounded-md */
-            border: 1px solid #e5e7eb; /* border-gray-200 */
-        }
-        .image-item-container h3 { 
-            margin-top: 0; 
-            color: #1d4ed8; /* text-blue-700 */
-        }
-        .no-image-message { 
-            color: #dc2626; /* text-red-600 */
-            font-weight: bold; 
-            margin-top: 0.625rem; /* mt-2.5 */
-        }
+        @media (max-width: 768px) { .image-item-container { max-width: 90%; flex: 1 1 90%; } }
+        .image-item-container img { max-width: 100%; height: auto; border-radius: 0.375rem; border: 1px solid #e5e7eb; }
+        .image-item-container h3 { margin-top: 0; color: #1d4ed8; }
+        .no-image-message { color: #dc2626; font-weight: bold; margin-top: 0.625rem; }
 
         /* Styles for the data table */
         table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-top: 20px; 
-            background-color: #fff; 
-            border-radius: 0.5rem; 
-            overflow: hidden; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            width: 100%; border-collapse: collapse; margin-top: 20px; background-color: #fff; border-radius: 0.5rem; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
         }
-        th, td { 
-            border: 1px solid #e0e0e0; /* light gray border */
-            padding: 10px; 
-            text-align: left; 
-        }
-        th { 
-            background-color: #e2f0ff; 
-            color: #333; 
-            font-weight: 600; /* semi-bold */
-        }
-        tr:nth-child(even) { 
-            background-color: #f9f9f9; 
-        }
-        tr:hover { 
-            background-color: #e0e0e0; 
-        }
+        th, td { border: 1px solid #e0e0e0; padding: 10px; text-align: left; }
+        th { background-color: #e2f0ff; color: #333; font-weight: 600; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        tr:hover { background-color: #e0e0e0; }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
 </head>
@@ -156,8 +122,8 @@
     <h1>Weather Analysis Report</h1>
 
     <section class="filter-container">
-        <h2>Filter Images by Date</h2>
-        <form method="GET" action="">
+        <h2>Filter by Date and District</h2>
+        <form method="GET" action="" id="filterForm">
             <label for="dateFilter" class="block mb-2 font-medium text-gray-700">Date:</label>
             <input 
                 type="date" 
@@ -167,6 +133,31 @@
                 class="block w-full sm:w-auto px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md focus:border-blue-500 focus:ring-blue-500 focus:outline-none"
             >
             
+            <label for="districtFilter" class="block mb-2 font-medium text-gray-700 mt-4">District:</label>
+            <select 
+                id="districtFilter" 
+                name="district" 
+                class="block w-full sm:w-auto px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 focus:outline-none"
+            >
+                <option value="">-- Select a District --</option>
+                <option value="All Districts" {% if selected_district == 'All Districts' %}selected{% endif %}>All Districts</option>
+                {% for district in available_districts %}
+                    <option value="{{ district }}" {% if selected_district == district %}selected{% endif %}>{{ district }}</option>
+                {% endfor %}
+            </select>
+
+            <label for="imageSelector" class="block mb-2 font-medium text-gray-700 mt-4">Select Image View:</label>
+            <select id="imageSelector" 
+                    name="image_view_type" 
+                    class="block w-full sm:w-auto px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 focus:outline-none">
+                <option value="">-- Select a View --</option>
+                <option value="cropped_tn" {% if selected_image_view == 'cropped_tn' %}selected{% endif %}>Cropped Tamil Nadu (Radar Only)</option>
+                <option value="masked_coimbatore" {% if selected_image_view == 'masked_coimbatore' %}selected{% endif %}>Shape-Masked District (Generated)</option>
+                {# Removed the pre_cropped_district option #}
+                <option value="tn_overlay" {% if selected_image_view == 'tn_overlay' %}selected{% endif %}>Overall TN Map with District Outlines</option>
+                <option value="combined_full_tn" {% if selected_image_view == 'combined_full_tn' %}selected{% endif %}>Combined Full TN View (Map + Outlines)</option>
+            </select>
+            
             <button type="submit" 
                     class="mt-4 px-6 py-2 bg-blue-600 text-white font-semibold rounded-md shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
                 Apply Filter
@@ -174,69 +165,48 @@
         </form>
     </section>
 
-    <section class="image-selection-container">
-        <h2>Select Image View</h2>
-        <select id="imageSelector" 
-                class="block w-full sm:w-auto px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 focus:outline-none">
-            <option value="">-- Select a View --</option>
-            <option value="cropped_tn">Cropped Tamil Nadu (Radar Only)</option>
-            <option value="masked_coimbatore">Shape-Masked Coimbatore (Isolated)</option>
-            
-            {% if image_urls.aligned_overlay_tn %}
-                <option value="tn_overlay">Overall TN Map with District Outlines</option>
-            {% else %}
-                <option value="" disabled>Overall TN Map with District Outlines (Not Generated)</option>
-            {% endif %}
-
-            {% if image_urls.cropped_tn or image_urls.aligned_overlay_tn %}
-                <option value="combined_full_tn">Combined Full TN View (Map + Outlines)</option>
-            {% endif %}
-        </select>
-
+    <section class="image-selection-container" id="imageDisplaySection">
+        <h2>Image View</h2>
         <div class="image-display-area">
             {# Container for Cropped Tamil Nadu Image #}
             <div id="cropped_tn_container" class="image-item-container">
                 <h3>Cropped Tamil Nadu (Radar Only)</h3>
                 {% if image_urls.cropped_tn %}
-                    <img src="{{ image_urls.cropped_tn }}" alt="Cropped Tamil Nadu Image" 
-                         onerror="this.onerror=null;this.src='https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available';"
-                    >
+                    <img src="{{ image_urls.cropped_tn }}" alt="Cropped Tamil Nadu Image">
                     <p>This image shows the full Tamil Nadu region as cropped, with radar data.</p>
                 {% else %}
-                    <p class="no-image-message">Cropped Tamil Nadu image not found for the selected date.</p>
+                    <p class="no-image-message">Cropped Tamil Nadu image not generated/found.</p>
                 {% endif %}
             </div>
 
-            {# Container for Shape-Masked Coimbatore Image #}
+            {# Container for Shape-Masked (Generated) District Image #}
             <div id="masked_coimbatore_container" class="image-item-container">
-                <h3>Shape-Masked Coimbatore</h3>
+                <h3>Shape-Masked {{ selected_district }} (Generated)</h3>
                 {% if image_urls.masked_coimbatore %}
-                    <img src="{{ image_urls.masked_coimbatore }}" alt="Shape-Masked Coimbatore Image"
-                         onerror="this.onerror=null;this.src='https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available';"
-                    >
-                    <p>This image shows the radar data masked to the shape of Coimbatore.</p>
+                    <img src="{{ image_urls.masked_coimbatore }}" alt="Shape-Masked District Image">
+                    <p>This image shows the radar data masked to the shape of {{ selected_district }}.</p>
                 {% else %}
-                    <p class="no-image-message">Shape-masked Coimbatore image not found for the selected date.</p>
+                    <p class="no-image-message">Shape-masked image not generated for {{ selected_district }}.</p>
                 {% endif %}
             </div>
+
+            {# Removed: Container for Pre-Cropped District Image #}
 
             {# Container for Overall TN Map with District Outlines #}
             <div id="tn_overlay_container" class="image-item-container">
                 <h3>Overall TN Map with District Outlines</h3>
                 {% if image_urls.aligned_overlay_tn %}
-                    <img src="{{ image_urls.aligned_overlay_tn }}" alt="Tamil Nadu with Shape Overlay"
-                         onerror="this.onerror=null;this.src='https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available';"
-                    >
-                    <p>This map shows Tamil Nadu with geographic outlines, possibly with radar data and/or highlighted districts.</p>
+                    <img src="{{ image_urls.aligned_overlay_tn }}" alt="Tamil Nadu with Shape Overlay">
+                    <p>This map shows Tamil Nadu with geographic outlines, with {% if selected_district != 'All Districts' %}{{ selected_district }}{% else %}all relevant districts{% endif %} highlighted.</p>
                 {% else %}
-                    <p class="no-image-message">Overall TN map with district outlines not found for the selected date.</p>
+                    <p class="no-image-message">Overall TN map with district outlines not generated.</p>
                 {% endif %}
             </div>
         </div>
     </section>
 
-    {# You can re-add your Cloud Analysis data table here if needed #}
-    <section class="data-section">
+    {# Cloud Analysis data table #}
+    <section class="data-section" id="cloudAnalysisSection">
         <h2>Cloud Analysis Data</h2>
         {% if cloud_analysis_data %}
         <table>
@@ -260,17 +230,19 @@
             </tbody>
         </table>
         {% else %}
-        <p class="no-image-message">No Cloud Analysis data available for the selected date.</p>
+        <p class="no-image-message">No Cloud Analysis data available for the selected date {% if selected_district != 'All Districts' %} and district "{{ selected_district }}"{% endif %}.</p>
         {% endif %}
     </section>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            const imageDisplaySection = document.getElementById('imageDisplaySection');
+            const cloudAnalysisSection = document.getElementById('cloudAnalysisSection');
             const imageSelector = document.getElementById('imageSelector');
             const allImageContainers = document.querySelectorAll('.image-item-container');
 
             function showImageContainers(viewType) {
-                // Hide all containers first
+                // Hide all specific image containers first
                 allImageContainers.forEach(container => {
                     container.style.display = 'none';
                 });
@@ -283,38 +255,21 @@
                 } else if (viewType === 'tn_overlay') {
                     document.getElementById('tn_overlay_container').style.display = 'block';
                 } else if (viewType === 'combined_full_tn') {
-                    // Show both cropped TN and the overlay map side-by-side
                     document.getElementById('cropped_tn_container').style.display = 'block';
                     document.getElementById('tn_overlay_container').style.display = 'block';
                 }
+                // Removed the pre_cropped_district case
             }
 
-            // Add event listener for when the selection changes
-            imageSelector.addEventListener('change', function() {
-                showImageContainers(this.value);
-            });
+            const submittedImageViewType = imageSelector.value;
+            const urlParams = new URLSearchParams(window.location.search);
+            const dateParam = urlParams.get('date');
+            const imageViewParam = urlParams.get('image_view_type');
 
-            // Set the default selection for the image selector on page load
-            // This ensures if a filter was applied and images are available, a view is shown.
-            const initialSelection = imageSelector.value;
-            if (initialSelection) {
-                showImageContainers(initialSelection);
-            } else {
-                // If no pre-selected option (e.g., first load without filters),
-                // attempt to display the first available image type.
-                if (document.getElementById('cropped_tn_container').querySelector('img') && 
-                    document.getElementById('cropped_tn_container').querySelector('img').src !== 'https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available') {
-                    imageSelector.value = 'cropped_tn';
-                    showImageContainers('cropped_tn');
-                } else if (document.getElementById('masked_coimbatore_container').querySelector('img') &&
-                           document.getElementById('masked_coimbatore_container').querySelector('img').src !== 'https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available') {
-                    imageSelector.value = 'masked_coimbatore';
-                    showImageContainers('masked_coimbatore');
-                } else if (document.getElementById('tn_overlay_container').querySelector('img') &&
-                           document.getElementById('tn_overlay_container').querySelector('img').src !== 'https://placehold.co/400x300/e0e0e0/000000?text=Image+Not+Available') {
-                    imageSelector.value = 'tn_overlay';
-                    showImageContainers('tn_overlay');
-                }
+            if (dateParam && imageViewParam) {
+                imageDisplaySection.style.display = 'block';
+                cloudAnalysisSection.style.display = 'block';
+                showImageContainers(submittedImageViewType);
             }
         });
     </script>

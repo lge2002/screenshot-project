@@ -123,9 +123,14 @@ USE_TZ = False
 
 
 
+# your_project/settings.py
+import os
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # your_project_name/settings.py
 
-import os
+
 
 # ... existing settings ...
 
