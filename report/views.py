@@ -5,6 +5,9 @@ import os
 from django.conf import settings
 from datetime import datetime, timedelta, date
 
+# --- Import your actual CloudAnalysis model ---
+from weather.models import CloudAnalysis 
+
 # --- Image Processing Imports ---
 import geopandas as gpd
 import matplotlib
@@ -36,7 +39,13 @@ FINAL_MAX_LAT = 13.53
 
 def report_view(request):
     selected_date_str = request.GET.get('date')
+    # --- IMPORTANT FIX: Handle empty district selection ---
+    # If the district parameter is missing or empty string, treat it as 'All Districts'
     selected_district = request.GET.get('district', 'All Districts')
+    if selected_district == "" or selected_district is None:
+        selected_district = "All Districts"
+    # --- END IMPORTANT FIX ---
+
     selected_image_view = request.GET.get('image_view_type', '') 
 
     filter_date = None 
@@ -141,41 +150,37 @@ def report_view(request):
             print(f"Generated Base64 for Cropped TN image.")
 
             # 2. Generate Masked District Image (Logic adjusted for 'All Districts' selected for this view)
-            # If 'All Districts' is selected AND the user chose the 'Shape-Masked District (Generated)' view,
-            # we will provide the full cropped TN image as the "masked" image, as it's the closest representation.
-            if selected_image_view == 'masked_coimbatore' and selected_district == 'All Districts':
-                masked_district_image_b64 = cropped_tn_image_b64 # Use the full TN radar image here
-                print(f"Shape-Masked District view selected with 'All Districts': defaulting to full TN radar image.")
-            elif selected_district != 'All Districts':
-                # Proceed with masking a specific district
-                district_rows_for_name = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
-                if not district_rows_for_name.empty:
-                    all_district_geometries = district_rows_for_name.geometry.to_list()
-                    district_polygon_for_mask = unary_union(all_district_geometries)
-                    
-                    mask = rasterize(
-                        [district_polygon_for_mask],
-                        out_shape=(height, width),
-                        transform=transform,
-                        fill=0,
-                        all_touched=True,
-                        dtype=np.uint8
-                    )
-                    mask_boolean = mask.astype(bool)
-                    cropped_district_img_np = np.zeros_like(img_np)
-                    cropped_district_img_np[mask_boolean] = img_np[mask_boolean]
+            # This block now correctly handles the 'All Districts' case for masked_coimbatore view
+            if selected_image_view == 'masked_coimbatore':
+                if selected_district == 'All Districts':
+                    masked_district_image_b64 = cropped_tn_image_b64 
+                    print(f"Shape-Masked District view selected with 'All Districts': defaulting to full TN radar image.")
+                else: # Specific district selected
+                    district_rows_for_name = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
+                    if not district_rows_for_name.empty:
+                        all_district_geometries = district_rows_for_name.geometry.to_list()
+                        district_polygon_for_mask = unary_union(all_district_geometries)
+                        
+                        mask = rasterize(
+                            [district_polygon_for_mask],
+                            out_shape=(height, width),
+                            transform=transform,
+                            fill=0,
+                            all_touched=True,
+                            dtype=np.uint8
+                        )
+                        mask_boolean = mask.astype(bool)
+                        cropped_district_img_np = np.zeros_like(img_np)
+                        cropped_district_img_np[mask_boolean] = img_np[mask_boolean]
 
-                    buffer = io.BytesIO()
-                    Image.fromarray(cropped_district_img_np).save(buffer, format="PNG")
-                    masked_district_image_b64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
-                    buffer.close()
-                    print(f"Generated Base64 for Masked '{selected_district}' image.")
-                else:
-                    print(f"Warning: District '{selected_district}' not found in shapefile for masked image generation.")
+                        buffer = io.BytesIO()
+                        Image.fromarray(cropped_district_img_np).save(buffer, format="PNG")
+                        masked_district_image_b64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
+                        buffer.close()
+                        print(f"Generated Base64 for Masked '{selected_district}' image.")
+                    else:
+                        print(f"Warning: District '{selected_district}' not found in shapefile for masked image generation.")
             else:
-                # This 'else' covers cases where selected_district is 'All Districts'
-                # AND selected_image_view is NOT 'masked_coimbatore'.
-                # In these cases, we don't try to generate a specific masked image.
                 print(f"Masked image generation skipped: specific district not selected or not applicable for current view.")
 
 
@@ -193,7 +198,6 @@ def report_view(request):
                 else:
                     ax.set_title(f"Aligned Screenshot (District '{selected_district}' not found for highlight)")
             else:
-                # If 'All Districts' is selected, show a generic title without specific highlighting text
                 ax.set_title("Aligned Screenshot with All TN District Outlines")
 
             ax.set_xlabel("Longitude")
@@ -229,30 +233,21 @@ def report_view(request):
         'aligned_overlay_tn': aligned_overlay_tn_b64,
     }
 
-    # --- Mock Cloud Analysis Data (unchanged) ---
-    mock_cloud_analysis_data = [
-        {'city': 'Coimbatore', 'values': 'Heavy Rain, Thunderstorms', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 9, 30)},
-        {'city': 'Chennai', 'values': 'Overcast, Light Drizzle', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 10, 0)},
-        {'city': 'Ariyalur', 'values': 'Light Showers', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 11, 0)}, # Changed 'Cool' to 'Light Showers' for consistency
-        {'city': 'Coimbatore', 'values': 'Moderate Rain, Gusty Winds', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 14, 0)},
-        {'city': 'Coimbatore', 'values': 'Intermittent Showers', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 16, 0)},
-        {'city': 'Trichy', 'values': 'Clear, Hot', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 27, 11, 0)},
-        {'city': 'Chennai', 'values': 'Sunny, High Temperature', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 28, 12, 0)},
-        {'city': 'Madurai', 'values': 'Scattered Clouds', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 28, 13, 0)},
-        {'city': 'Coimbatore', 'values': 'High Humidity, Scattered Clouds', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 26, 10, 0)},
-        {'city': 'Chennai', 'values': 'Partly Cloudy, Moderate Rain', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 26, 11, 0)},
-        {'city': 'Madurai', 'values': 'Clear Skies, Low Humidity', 'type': 'Weather radar', 'timestamp': datetime(2023, 10, 26, 12, 0)},
-    ]
+    # --- Fetch Cloud Analysis Data from Database (USING CloudAnalysis MODEL) ---
+    # Filter by date part of timestamp
+    cloud_analysis_query = CloudAnalysis.objects.filter(
+        timestamp__date=filter_date 
+    )
 
-    filtered_cloud_analysis_data = []
-    for record in mock_cloud_analysis_data:
-        if record['timestamp'].date() == filter_date:
-            # If 'All Districts' is selected, include all cities for the date
-            # Otherwise, filter by the specific selected district
-            if selected_district == 'All Districts' or record['city'].lower() == selected_district.lower():
-                filtered_cloud_analysis_data.append(record)
+    if selected_district != 'All Districts':
+        # Filter by specific district name (using 'city' field from your model)
+        cloud_analysis_query = cloud_analysis_query.filter(city__iexact=selected_district)
+
+    # Order the results and convert queryset to a list
+    filtered_cloud_analysis_data = list(cloud_analysis_query.order_by('city', 'timestamp'))
     
-    filtered_cloud_analysis_data.sort(key=lambda x: (x['city'], x['timestamp']))
+    print(f"Fetched {len(filtered_cloud_analysis_data)} weather data points for {target_date_display_str} and {selected_district}.")
+
 
     # --- Dynamically get available districts from shapefile ---
     full_available_districts = []
@@ -285,7 +280,7 @@ def report_view(request):
         'selected_date': filter_date.strftime('%Y-%m-%d'),
         'selected_district': selected_district,
         'available_districts': full_available_districts,
-        'cloud_analysis_data': filtered_cloud_analysis_data,
+        'cloud_analysis_data': filtered_cloud_analysis_data, 
         'selected_image_view': selected_image_view,
     }
     return render(request, 'report/report.html', context)
