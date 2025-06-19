@@ -3,8 +3,8 @@
 from django.shortcuts import render
 import os
 from django.conf import settings
-from datetime import datetime, timedelta, date, time # NEW: Import time
-import pytz # NEW: For timezone awareness
+from datetime import datetime, timedelta, date, time
+import pytz
 
 # --- Import your actual CloudAnalysis model ---
 from weather.models import CloudAnalysis 
@@ -44,10 +44,12 @@ def report_view(request):
     if selected_district == "" or selected_district is None:
         selected_district = "All Districts"
 
-    # --- NEW: Get time filter parameters ---
-    selected_start_time_str = request.GET.get('start_time')
-    selected_end_time_str = request.GET.get('end_time')
-    # --- END NEW ---
+    # --- UPDATED: Get time filter parameters from new frontend names ---
+    start_time_hour_str = request.GET.get('start_time_hour')
+    start_time_minute_str = request.GET.get('start_time_minute')
+    end_time_hour_str = request.GET.get('end_time_hour')
+    end_time_minute_str = request.GET.get('end_time_minute')
+    # --- END UPDATED ---
 
     selected_image_view = request.GET.get('image_view_type', '') 
 
@@ -63,10 +65,85 @@ def report_view(request):
     
     target_date_display_str = filter_date.strftime('%Y-%m-%d')
 
+    # --- Prepare selected time strings for template context (HH:MM format) ---
+    selected_start_time_for_template = ''
+    selected_end_time_for_template = ''
+
+    # --- Construct datetime objects for actual filtering ---
+    filter_start_datetime = None
+    filter_end_datetime = None
+
+    current_timezone = pytz.timezone(settings.TIME_ZONE) if settings.USE_TZ else None
+
+    # Logic to set default times if not provided in GET parameters (e.g., initial page load)
+    if not start_time_hour_str or not start_time_minute_str:
+        now = datetime.now()
+        current_minute = now.minute
+        current_hour = now.hour
+
+        # Round up minutes to the nearest 15 for 'From Time'
+        from_minute = (current_minute // 15) * 15
+        if current_minute % 15 != 0:
+            from_minute = ((current_minute // 15) + 1) * 15
+            if from_minute == 60:
+                from_minute = 0
+                current_hour = (current_hour + 1) % 24
+
+        from_hour = current_hour
+        
+        # Set default 'From Time'
+        start_time_obj = time(from_hour, from_minute)
+        selected_start_time_for_template = start_time_obj.strftime("%H:%M")
+        filter_start_datetime = datetime.combine(filter_date, start_time_obj)
+
+        # Set default 'To Time' (15 minutes after 'From Time')
+        to_minute = from_minute + 15
+        to_hour = from_hour
+        if to_minute == 60:
+            to_minute = 0
+            to_hour = (to_hour + 1) % 24
+        
+        end_time_obj = time(to_hour, to_minute)
+        selected_end_time_for_template = end_time_obj.strftime("%H:%M")
+        filter_end_datetime = datetime.combine(filter_date, end_time_obj)
+
+    else:
+        # If time parameters are provided, use them
+        try:
+            start_hour = int(start_time_hour_str)
+            start_minute = int(start_time_minute_str)
+            end_hour = int(end_time_hour_str)
+            end_minute = int(end_time_minute_str)
+
+            start_time_obj = time(start_hour, start_minute)
+            end_time_obj = time(end_hour, end_minute)
+
+            selected_start_time_for_template = start_time_obj.strftime("%H:%M")
+            selected_end_time_for_template = end_time_obj.strftime("%H:%M")
+
+            filter_start_datetime = datetime.combine(filter_date, start_time_obj)
+            filter_end_datetime = datetime.combine(filter_date, end_time_obj)
+
+        except ValueError as e:
+            print(f"Error parsing time parameters: {e}. Defaulting to full day.")
+            # If parsing fails, fall back to full day (00:00 to 23:59:59)
+            filter_start_datetime = datetime.combine(filter_date, time(0, 0, 0))
+            filter_end_datetime = datetime.combine(filter_date, time(23, 59, 59, 999999))
+            selected_start_time_for_template = "00:00"
+            selected_end_time_for_template = "23:59"
+
+
+    # Make filter datetimes timezone-aware if USE_TZ is true
+    if current_timezone:
+        if filter_start_datetime:
+            filter_start_datetime = current_timezone.localize(filter_start_datetime)
+        if filter_end_datetime:
+            filter_end_datetime = current_timezone.localize(filter_end_datetime)
+
 
     # --- DEBUGGING PRINTS ---
     print(f"\n--- Generating Images for Date: {target_date_display_str}, District: {selected_district}, Image View: {selected_image_view} ---")
-    print(f"Time Range: {selected_start_time_str} - {selected_end_time_str}") # NEW DEBUG PRINT
+    print(f"Time Range Filter (Backend): {filter_start_datetime} - {filter_end_datetime}")
     print(f"SHAPEFILE_PATH configured as: {SHAPEFILE_PATH}")
     # --- END DEBUGGING PRINTS ---
 
@@ -154,7 +231,7 @@ def report_view(request):
             print(f"Generated Base64 for Cropped TN image.")
 
             # 2. Generate Masked District Image (Logic adjusted for 'All Districts' selected for this view)
-            if selected_image_view == 'masked_coimbatore':
+            if selected_image_view == 'masked_coimbatore': # Note: 'masked_coimbatore' is a fixed value, consider if this should be dynamic based on selected_district
                 if selected_district == 'All Districts':
                     masked_district_image_b64 = cropped_tn_image_b64 
                     print(f"Shape-Masked District view selected with 'All Districts': defaulting to full TN radar image.")
@@ -195,9 +272,9 @@ def report_view(request):
             if selected_district != 'All Districts':
                 district_rows_for_name_for_highlight = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
                 if not district_rows_for_name_for_highlight.empty:
-                     district_rows_for_name_for_highlight.boundary.plot(ax=ax, edgecolor='cyan', linewidth=2, linestyle='--', label=selected_district)
-                     ax.set_title(f"Aligned Screenshot with {selected_district} Highlighted")
-                     ax.legend()
+                    district_rows_for_name_for_highlight.boundary.plot(ax=ax, edgecolor='cyan', linewidth=2, linestyle='--', label=selected_district)
+                    ax.set_title(f"Aligned Screenshot with {selected_district} Highlighted")
+                    ax.legend()
                 else:
                     ax.set_title(f"Aligned Screenshot (District '{selected_district}' not found for highlight)")
             else:
@@ -236,6 +313,7 @@ def report_view(request):
         'aligned_overlay_tn': aligned_overlay_tn_b64,
     }
 
+    # --- Filtering CloudAnalysis data ---
     cloud_analysis_query = CloudAnalysis.objects.filter(
         timestamp__date=filter_date # Filter by date part of timestamp
     )
@@ -243,41 +321,25 @@ def report_view(request):
     if selected_district != 'All Districts':
         cloud_analysis_query = cloud_analysis_query.filter(city__iexact=selected_district)
 
+    # Apply time filters if valid filter_start_datetime and filter_end_datetime were constructed
+    if filter_start_datetime and filter_end_datetime:
+        # Using __gte for greater than or equal to, and __lt for less than (exclusive end)
+        # This correctly defines the interval: [start_time, end_time)
+        cloud_analysis_query = cloud_analysis_query.filter(
+            timestamp__gte=filter_start_datetime,
+            timestamp__lt=filter_end_datetime # Changed from __lte to __lt for standard interval
+        )
+    
+    # NEW FILTER: Exclude records where 'values' indicates no significant precipitation
+    # Assuming the exact string is "No significant cloud levels found for precipitation"
+    # You might want to make this string a constant or configuration if it changes often.
+    EXCLUDE_NO_PRECIP_MESSAGE = "No significant cloud levels found for precipitation"
+    cloud_analysis_query = cloud_analysis_query.exclude(values__iexact=EXCLUDE_NO_PRECIP_MESSAGE)
 
-    current_timezone = pytz.timezone(settings.TIME_ZONE) if settings.USE_TZ else None
-
-
-    if selected_start_time_str:
-        try:
-            start_time = datetime.strptime(selected_start_time_str, '%H:%M').time()
-        except ValueError:
-            start_time = time(0, 0, 0) 
-    else:
-        start_time = time(0, 0, 0)
-
-    if selected_end_time_str:
-        try:
-            end_time = datetime.strptime(selected_end_time_str, '%H:%M').time()
-        except ValueError:
-            end_time = time(23, 59, 59, 999999) 
-    else:
-        end_time = time(23, 59, 59, 999999) 
-
-    start_datetime_filter = datetime.combine(filter_date, start_time)
-    end_datetime_filter = datetime.combine(filter_date, end_time)
-
-    if current_timezone:
-        start_datetime_filter = current_timezone.localize(start_datetime_filter)
-        end_datetime_filter = current_timezone.localize(end_datetime_filter)
-
-    cloud_analysis_query = cloud_analysis_query.filter(
-        timestamp__gte=start_datetime_filter,
-        timestamp__lte=end_datetime_filter
-    )
 
     filtered_cloud_analysis_data = list(cloud_analysis_query.order_by('city', 'timestamp'))
     
-    print(f"Fetched {len(filtered_cloud_analysis_data)} weather data points for {target_date_display_str} and {selected_district}.")
+    print(f"Fetched {len(filtered_cloud_analysis_data)} weather data points for {target_date_display_str} and {selected_district} (excluding 'no precipitation' values).")
 
 
     full_available_districts = []
@@ -312,7 +374,9 @@ def report_view(request):
         'available_districts': full_available_districts,
         'cloud_analysis_data': filtered_cloud_analysis_data, 
         'selected_image_view': selected_image_view,
-        'selected_start_time': selected_start_time_str,
-        'selected_end_time': selected_end_time_str,
+        # --- UPDATED: Pass the HH:MM strings to context for frontend dropdowns ---
+        'selected_start_time': selected_start_time_for_template,
+        'selected_end_time': selected_end_time_for_template,
+        # --- END UPDATED ---
     }
     return render(request, 'report/report.html', context)

@@ -124,8 +124,8 @@ class Command(BaseCommand):
                 img_np = np.array(img_pil)
                 height, width, _ = img_np.shape
 
-                final_min_lon = 74.82
-                final_max_lon = 80.33
+                final_min_lon = 74.80
+                final_max_lon = 80.38
                 final_min_lat = 7.97
                 final_max_lat = 13.53
 
