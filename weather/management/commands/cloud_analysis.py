@@ -6,6 +6,9 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+# ADDED: These imports are necessary for the fallback hiding methods
+from selenium.webdriver.common.action_chains import ActionChains 
+from selenium.webdriver.common.keys import Keys 
 from webdriver_manager.chrome import ChromeDriverManager
 from PIL import Image
 from datetime import datetime
@@ -25,9 +28,11 @@ results_for_json = []
 class Command(BaseCommand):
     help = 'Automates screenshot capture from Windy.com, crops to ALL Tamil Nadu districts, masks with shapefile, and analyzes cloud levels.'
 
+    # ADDED: Your confirmed XPath for the blue dot
+    BLUE_DOT_XPATH = '//*[@id="leaflet-map"]/div[1]/div[4]/div[2]'
+
     def handle(self, **kwargs):
         self.stdout.write(self.style.SUCCESS('Starting Windy.com cloud analysis automation for all Tamil Nadu districts...'))
-
 
         shapefile_path = "C:/Users/tamilarasans/Downloads/gadm41_IND_3.json/gadm41_IND_3.json"
         if not os.path.exists(shapefile_path):
@@ -42,7 +47,6 @@ class Command(BaseCommand):
                 return 
 
             tamil_nadu_gdf = tamil_nadu_gdf.to_crs("EPSG:4326") 
-
 
             all_tn_districts = tamil_nadu_gdf['NAME_2'].unique().tolist()
             if not all_tn_districts:
@@ -75,10 +79,12 @@ class Command(BaseCommand):
                 chrome_options = webdriver.ChromeOptions()
                 chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 chrome_options.add_experimental_option('useAutomationExtension', False)
+                # ADDED: Ensure window size is set as an argument for consistency
+                chrome_options.add_argument("--window-size=1920,1080") 
 
                 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-                driver.set_window_size(1920, 1080) 
-
+                # REMOVED: driver.set_window_size(1920, 1080) as it's now set via options
+                
                 driver.get("https://www.windy.com/-Weather-radar-radar?radar,10.950,77.500,7")
                 self.stdout.write(f"Navigated to Windy.com with radar layer active and offset coordinates.")
 
@@ -89,27 +95,71 @@ class Command(BaseCommand):
                     cookie_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button.cc-dismiss')))
                     cookie_button.click()
                     self.stdout.write('Cookie consent dismissed.')
+                    time.sleep(1) 
                 except Exception as e:
                     self.stdout.write(f"Could not find or dismiss cookie consent (might not be present): {e}. Continuing...")
                     pass
 
-                time.sleep(10) 
-                driver.save_screenshot(full_screenshot_path)
-                self.stdout.write(f"Full screenshot saved at: {full_screenshot_path}")
+                self.stdout.write("Waiting for map to fully load (10 seconds)...")
+                time.sleep(10) # Your original wait
 
+                # --- START OF ADDED BLUE DOT HIDING LOGIC (Selenium methods) ---
+                self.stdout.write("Attempting to hide the blue dot using JavaScript injection with confirmed XPath...")
+
+                try:
+                    # Line to find the element
+                    # Using WebDriverWait for presence, more robust than direct find_element after sleep
+                    dot_element = wait.until(EC.presence_of_element_located((By.XPATH, self.BLUE_DOT_XPATH)))
+                    
+                    # Line to execute JavaScript to change its style
+                    driver.execute_script("arguments[0].style.display = 'none';", dot_element)
+                    self.stdout.write("SUCCESS (Attempted): Dot element's display set to 'none' via JavaScript using confirmed XPath.")
+                    self.stdout.write("NOTE: This method is often ineffective for elements drawn on a canvas, the dot may still be visible in the screenshot.")
+                    time.sleep(1) 
+                    
+                except Exception as e:
+                    self.stdout.write(f"FAILED to hide dot via JavaScript at XPath '{self.BLUE_DOT_XPATH}': {e}.")
+                    self.stdout.write("The element might not be present by this XPath, or another issue occurred. Trying fallback interactive methods (click on map, ESC key)...")
+
+                    # Fallback 1: Click on a general area of the map canvas
+                    try:
+                        self.stdout.write("Fallback 1: Trying to click on map canvas.")
+                        ActionChains(driver).move_by_offset(10, 10).click().perform()
+                        self.stdout.write("Clicked on a general page area to dismiss dot.")
+                        time.sleep(1)
+                    except Exception as click_e:
+                        self.stdout.write(f"Fallback 1 (click on map) failed: {click_e}. Trying next method.")
+                        
+                    # Fallback 2: Press the ESC key
+                    try:
+                        self.stdout.write("Fallback 2: Trying to press ESC key.")
+                        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+                        self.stdout.write("Pressed ESC key to dismiss dot.")
+                        time.sleep(1)
+                    except Exception as esc_e:
+                        self.stdout.write(f"Fallback 2 (ESC key) failed: {esc_e}. The dot might still be visible.")
+                # --- END OF ADDED BLUE DOT HIDING LOGIC ---
+
+                # Adding a small wait after hiding attempts before screenshot
+                time.sleep(2) 
+
+                self.stdout.write(f"Taking full screenshot and saving to: {full_screenshot_path}")
+                driver.save_screenshot(full_screenshot_path)
+                self.stdout.write("Screenshot saved successfully.")
+                
             except Exception as e:
-                self.stderr.write(self.style.ERROR(f"Error during browser automation: {e}"))
-                if driver:
-                    driver.quit()
+                self.stderr.write(self.style.ERROR(f"An unexpected error occurred during browser automation: {e}"))
+                # No driver.quit() here, it's handled in finally block below
                 self.stdout.write("Waiting 15 minutes before retry...\n")
                 time.sleep(900)
-                continue
+                continue # Skip image processing and wait for next iteration
             finally:
                 if driver:
                     driver.quit()
 
+            # The rest of your image processing and analysis logic
             try:
-                image = Image.open(full_screenshot_path)
+                image = Image.open(full_screenshot_path).convert("RGB") # Ensure RGB for consistency
                 if not (0 <= CROP_BOX[0] < CROP_BOX[2] <= image.width and
                         0 <= CROP_BOX[1] < CROP_BOX[3] <= image.height):
                     self.stderr.write(self.style.ERROR("CROP_BOX coordinates are out of bounds. Skipping all district analysis for this run and waiting."))
@@ -131,16 +181,14 @@ class Command(BaseCommand):
 
                 transform = from_bounds(final_min_lon, final_min_lat, final_max_lon, final_max_lat, width, height)
 
-
                 current_run_results = [] 
 
                 for district_name in all_tn_districts:
                     self.stdout.write(f"\nProcessing district: {district_name}")
 
-                    district_masked_folder = os.path.join(base_folder, "masked_cropped", district_name.replace(" ", "_")) # Replace spaces for folder names
+                    district_masked_folder = os.path.join(base_folder, "masked_cropped", district_name.replace(" ", "_")) 
                     os.makedirs(district_masked_folder, exist_ok=True)
                     masked_cropped_path = os.path.join(district_masked_folder, f"{district_name.lower().replace(' ', '_')}_masked.png")
-
 
                     current_district_gdf = tamil_nadu_gdf[tamil_nadu_gdf['NAME_2'] == district_name]
 
@@ -160,7 +208,6 @@ class Command(BaseCommand):
                     )
 
                     transparent_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-
 
                     original_rgba_image = cropped_image.convert("RGBA")
                     original_rgba_np = np.array(original_rgba_image)
@@ -237,7 +284,3 @@ class Command(BaseCommand):
 
             self.stdout.write("\nWaiting 15 minutes before next run...\n")
             time.sleep(900)
-
-
-
-            
