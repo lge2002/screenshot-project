@@ -66,6 +66,10 @@ class Command(BaseCommand):
             return
 
         while True:
+            self.stdout.write("\n" + "="*50)
+            self.stdout.write("STARTING NEW 15-MINUTE CYCLE: Screenshot and Analysis")
+            self.stdout.write("="*50 + "\n")
+
             current_time = datetime.now()
             timestamp_str = current_time.strftime('%Y-%m-%d_%H-%M-%S')
 
@@ -81,6 +85,8 @@ class Command(BaseCommand):
             CROP_BOX = (551, 170, 1065, 687)
 
             driver = None
+            current_run_results = []
+
             try:
                 chrome_options = webdriver.ChromeOptions()
                 chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -187,8 +193,6 @@ class Command(BaseCommand):
 
                 transform = from_bounds(final_min_lon, final_min_lat, final_max_lon, final_max_lat, width, height)
 
-                current_run_results = []
-
                 for district_name in all_tn_districts:
                     self.stdout.write(f"\nProcessing district: {district_name}")
 
@@ -213,47 +217,71 @@ class Command(BaseCommand):
                         dtype=np.uint8
                     )
 
+                    # Create a blank RGBA image to paste only the masked pixels
                     transparent_image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
+                    # Convert cropped_image to RGBA to get alpha channel for accurate pixel copying
                     original_rgba_image = cropped_image.convert("RGBA")
                     original_rgba_np = np.array(original_rgba_image)
 
+                    # Iterate over pixels within the mask and copy them to the new transparent image
                     for y in range(height):
                         for x in range(width):
-                            if mask[y, x]:
+                            if mask[y, x]: # If this pixel is part of the district shape
                                 r, g, b, a = original_rgba_np[y, x]
-                                if a > 0:
-                                    transparent_image.putpixel((x, y), (r, g, b, 255))
+                                if a > 0: # Only copy if the original pixel isn't fully transparent
+                                    transparent_image.putpixel((x, y), (r, g, b, 255)) # Make it fully opaque in the masked output
 
                     transparent_image.save(masked_cropped_path)
                     self.stdout.write(f"Masked image of {district_name} saved at: {masked_cropped_path}")
 
+                    # The Windy legend colors in RGB format
                     windy_legend = {
-                        (42, 88, 142): "1.5 mm - Blue", (49, 152, 158): "2 mm - Cyan",
-                        (58, 190, 140): "3 mm - Aqua Green", (109, 207, 102): "7 mm - Lime",
-                        (192, 222, 72): "10 mm - Yellow Green", (241, 86, 59): "20 mm - Red",
+                        (42, 88, 142): "1.5 mm - Blue",
+                        (49, 152, 158): "2 mm - Cyan",
+                        (58, 190, 140): "3 mm - Aqua Green",
+                        (109, 207, 102): "7 mm - Lime",
+                        (192, 222, 72): "10 mm - Yellow Green",
+                        (241, 86, 59): "20 mm - Red",
                         (172, 64, 112): "30 mm - Purple"
                     }
 
-                    def match_color(rgb_pixel, tolerance=60):
-                        for legend_color_rgb, label in windy_legend.items():
-                            diff = sum(abs(rgb_pixel[i] - legend_color_rgb[i]) for i in range(3))
-                            if diff <= tolerance:
-                                return label
-                        return None
+                    def match_color_robust(rgb_pixel, legend, max_tolerance=60):
+                        """
+                        Finds the best matching color from the legend for a given pixel,
+                        returning the label of the closest match within tolerance.
+                        Uses Euclidean distance for better color similarity measurement.
+                        """
+                        best_match_label = None
+                        min_distance = float('inf')
 
-                    image_district = transparent_image.convert('RGB')
-                    pixels = list(image_district.getdata())
-                    unique_pixels = set(pixels)
+                        for legend_color_rgb, label in legend.items():
+                            # Calculate Euclidean distance in RGB space
+                            distance = ((rgb_pixel[0] - legend_color_rgb[0])**2 +
+                                        (rgb_pixel[1] - legend_color_rgb[1])**2 +
+                                        (rgb_pixel[2] - legend_color_rgb[2])**2)**0.5
+
+                            if distance <= max_tolerance and distance < min_distance:
+                                min_distance = distance
+                                best_match_label = label
+                        return best_match_label
+
+                    image_district_for_analysis = transparent_image.convert('RGB')
+                    pixels_to_analyze = list(image_district_for_analysis.getdata())
+                    
+                    # Use a set to collect unique labels found in the district
                     matched_colors = set()
 
-                    for pixel_color in unique_pixels:
+                    # Iterate through all pixels in the masked image (which are now either actual map data or black from transparency)
+                    for pixel_color in pixels_to_analyze:
+                        # Exclude pure black pixels, which represent the transparent background outside the mask
                         if pixel_color != (0, 0, 0):
-                            label = match_color(pixel_color)
+                            label = match_color_robust(pixel_color, windy_legend, max_tolerance=60) # You can adjust this tolerance
                             if label:
                                 matched_colors.add(label)
 
                     timestamp_for_db = current_time
+                    # Format the output for the 'values' field: comma-separated and sorted
                     color_text = ", ".join(sorted(matched_colors)) if matched_colors else "No significant cloud levels found for precipitation"
                     self.stdout.write(f"Analysis for {district_name}: {color_text}")
 
