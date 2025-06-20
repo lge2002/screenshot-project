@@ -28,7 +28,7 @@ import base64
 warnings.filterwarnings("ignore")
 
 # --- GLOBAL CONFIGURATION FOR IMAGE GENERATION (MUST MATCH YOUR SETUP) ---
-SHAPEFILE_PATH = os.path.join(settings.BASE_DIR, 'weather', 'management', 'commands', 'gadm41_IND_3.json') 
+SHAPEFILE_PATH = os.path.join(settings.BASE_DIR, 'weather', 'management', 'commands', 'gadm41_IND_2.json') 
 
 # These are the alignment values for the FULL TN map with overlay.
 FINAL_MIN_LON = 74.80

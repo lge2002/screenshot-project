@@ -40,7 +40,7 @@ class Command(BaseCommand):
     def handle(self, **kwargs):
         self.stdout.write(self.style.SUCCESS('Starting Windy.com cloud analysis automation for all Tamil Nadu districts...'))
 
-        shapefile_path = "C:/Users/tamilarasans/Downloads/gadm41_IND_3.json/gadm41_IND_3.json"
+        shapefile_path = "C:/Users/tamilarasans/Downloads/gadm41_IND_2.json/gadm41_IND_2.json"
         if not os.path.exists(shapefile_path):
             self.stderr.write(self.style.ERROR(f"Critical Error: Shapefile not found at {shapefile_path}. Exiting."))
             return
