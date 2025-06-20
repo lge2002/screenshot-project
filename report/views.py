@@ -32,8 +32,8 @@ SHAPEFILE_PATH = os.path.join(settings.BASE_DIR, 'weather', 'management', 'comma
 
 # These are the alignment values for the FULL TN map with overlay.
 FINAL_MIN_LON = 74.80
-FINAL_MAX_LON = 80.38
-FINAL_MIN_LAT = 7.97
+FINAL_MAX_LON = 80.37
+FINAL_MIN_LAT = 7.98
 FINAL_MAX_LAT = 13.53
 # -------------------------------------------------------------------------
 
@@ -267,7 +267,7 @@ def report_view(request):
             # 3. Generate Overall TN Map with District Outlines (and highlighted district)
             fig, ax = plt.subplots(figsize=(10, 10))
             ax.imshow(img_np, extent=[FINAL_MIN_LON, FINAL_MAX_LON, FINAL_MIN_LAT, FINAL_MAX_LAT])
-            gdf_tn.boundary.plot(ax=ax, edgecolor='black', linewidth=1)
+            gdf_tn.boundary.plot(ax=ax, edgecolor='black', linewidth=0.5)
 
             if selected_district != 'All Districts':
                 district_rows_for_name_for_highlight = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
