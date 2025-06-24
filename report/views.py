@@ -81,7 +81,7 @@ def report_view(request):
         current_minute = now.minute
         current_hour = now.hour
 
-        # Round up minutes to the nearest 15 for 'From Time'
+        # Round up minutes to the nearest 15 for 'From Time'                        
         from_minute = (current_minute // 15) * 15
         if current_minute % 15 != 0:
             from_minute = ((current_minute // 15) + 1) * 15
@@ -323,16 +323,13 @@ def report_view(request):
 
     # Apply time filters if valid filter_start_datetime and filter_end_datetime were constructed
     if filter_start_datetime and filter_end_datetime:
-        # Using __gte for greater than or equal to, and __lt for less than (exclusive end)
-        # This correctly defines the interval: [start_time, end_time)
+
         cloud_analysis_query = cloud_analysis_query.filter(
             timestamp__gte=filter_start_datetime,
             timestamp__lt=filter_end_datetime # Changed from __lte to __lt for standard interval
         )
     
-    # NEW FILTER: Exclude records where 'values' indicates no significant precipitation
-    # Assuming the exact string is "No significant cloud levels found for precipitation"
-    # You might want to make this string a constant or configuration if it changes often.
+
     EXCLUDE_NO_PRECIP_MESSAGE = "No significant cloud levels found for precipitation"
     cloud_analysis_query = cloud_analysis_query.exclude(values__iexact=EXCLUDE_NO_PRECIP_MESSAGE)
 
