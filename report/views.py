@@ -81,7 +81,7 @@ def report_view(request):
         current_minute = now.minute
         current_hour = now.hour
 
-        # Round up minutes to the nearest 15 for 'From Time'                        
+        # Round up minutes to the nearest 15 for 'From Time'                            
         from_minute = (current_minute // 15) * 15
         if current_minute % 15 != 0:
             from_minute = ((current_minute // 15) + 1) * 15
@@ -147,62 +147,17 @@ def report_view(request):
     print(f"SHAPEFILE_PATH configured as: {SHAPEFILE_PATH}")
     # --- END DEBUGGING PRINTS ---
 
-    # --- LOGIC TO FIND THE CORRECT TIMESTAMPED FOLDER (for radar images) ---
+    # --- LOGIC TO FIND ALL RELEVANT TIMESTAMPED FOLDERS FOR THE SELECTED DATE AND TIME RANGE ---
     image_base_media_path = settings.MEDIA_ROOT 
+    
+    # This list will store dictionaries, each containing image URLs for a specific timestamp
+    # e.g., [{'timestamp': datetime_obj, 'cropped_tn': 'b64_str', 'masked_coimbatore': 'b64_str', ...}, ...]
+    generated_images_for_display = [] 
 
-    found_date_folder_with_time = None
-    if os.path.exists(image_base_media_path) and os.path.isdir(image_base_media_path):
-        all_timestamp_folders = []
-        for d in os.listdir(image_base_media_path):
-            full_path = os.path.join(image_base_media_path, d)
-            if os.path.isdir(full_path):
-                try:
-                    folder_date_part_str = d.split('_')[0]
-                    folder_date = datetime.strptime(folder_date_part_str, '%Y-%m-%d').date()
-                    
-                    if folder_date == filter_date:
-                        all_timestamp_folders.append(d) 
-                except (ValueError, IndexError):
-                    pass 
-        
-        if all_timestamp_folders:
-            all_timestamp_folders.sort()
-            found_date_folder_with_time = all_timestamp_folders[-1] 
-            print(f"Found timestamped folder for date {target_date_display_str}: {found_date_folder_with_time}")
-        else:
-            print(f"No timestamped folder found for date: {target_date_display_str} within {image_base_media_path}")
-    else:
-        print(f"Image base directory '{image_base_media_path}' does not exist or is not a directory. Please check settings.MEDIA_ROOT.")
-
-    cropped_tn_image_b64 = None
-    masked_district_image_b64 = None 
-    aligned_overlay_tn_b64 = None
-
-    # --- Start Image Generation/Loading ---
-    img_pil = None
-    img_np = None
     gdf = None
     gdf_tn = None
-    
-    # Try loading base radar image from the timestamped folder
-    if found_date_folder_with_time:
-        BASE_MAP_IMAGE_SOURCE_FOR_THIS_RUN = os.path.join(
-            settings.MEDIA_ROOT, 
-            found_date_folder_with_time, 
-            'cropped', 
-            'tamil_nadu_cropped.png'
-        )
-        print(f"Attempting to load base map image from: {BASE_MAP_IMAGE_SOURCE_FOR_THIS_RUN}")
-        try:
-            img_pil = Image.open(BASE_MAP_IMAGE_SOURCE_FOR_THIS_RUN).convert("RGB")
-            img_np = np.array(img_pil)
-            print(f"Base map image loaded successfully.")
-        except FileNotFoundError:
-            print(f"ERROR: Base map image '{BASE_MAP_IMAGE_SOURCE_FOR_THIS_RUN}' not found.")
-        except Exception as e:
-            print(f"ERROR loading base map image: {e}")
 
-    # Try loading shapefile
+    # Try loading shapefile once
     try:
         if not os.path.exists(SHAPEFILE_PATH):
             raise FileNotFoundError(f"Shapefile not found at {SHAPEFILE_PATH}.")
@@ -217,25 +172,67 @@ def report_view(request):
     except Exception as e:
         print(f"ERROR loading shapefile: {e}")
 
-    # Only proceed with image generation if both base image and shapefile loaded
-    if img_pil is not None and gdf_tn is not None:
-        height, width, _ = img_np.shape
-        transform = from_bounds(FINAL_MIN_LON, FINAL_MIN_LAT, FINAL_MAX_LON, FINAL_MAX_LAT, width, height)
 
-        try:
-            # 1. Generate Cropped Tamil Nadu (Radar Only) - this is just the source image
-            buffer = io.BytesIO()
-            img_pil.save(buffer, format="PNG")
-            cropped_tn_image_b64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
-            buffer.close()
-            print(f"Generated Base64 for Cropped TN image.")
+    if os.path.exists(image_base_media_path) and os.path.isdir(image_base_media_path) and gdf_tn is not None:
+        available_image_timestamps_and_folders = []
+        for d in os.listdir(image_base_media_path):
+            full_path_to_folder = os.path.join(image_base_media_path, d)
+            if os.path.isdir(full_path_to_folder):
+                try:
+                    # Assuming folder name format is YYYY-MM-DD_HH-MM-SS or similar
+                    # We need the full timestamp for comparison
+                    folder_timestamp_str = d # e.g., '2023-10-27_10-30-00'
+                    folder_datetime_obj = datetime.strptime(folder_timestamp_str, '%Y-%m-%d_%H-%M-%S')
+                    
+                    # Make folder_datetime_obj timezone-aware for comparison if USE_TZ is true
+                    if current_timezone:
+                        folder_datetime_obj = current_timezone.localize(folder_datetime_obj)
 
-            # 2. Generate Masked District Image (Logic adjusted for 'All Districts' selected for this view)
-            if selected_image_view == 'masked_coimbatore': # Note: 'masked_coimbatore' is a fixed value, consider if this should be dynamic based on selected_district
-                if selected_district == 'All Districts':
-                    masked_district_image_b64 = cropped_tn_image_b64 
-                    print(f"Shape-Masked District view selected with 'All Districts': defaulting to full TN radar image.")
-                else: 
+                    # Only consider folders on the selected date and within the time filter
+                    if folder_datetime_obj.date() == filter_date and \
+                       filter_start_datetime <= folder_datetime_obj < filter_end_datetime:
+                        available_image_timestamps_and_folders.append((folder_datetime_obj, full_path_to_folder))
+                except (ValueError, IndexError):
+                    # Ignore folders that don't match the expected timestamp format
+                    pass
+        
+        # Sort by timestamp to ensure chronological order
+        available_image_timestamps_and_folders.sort(key=lambda x: x[0])
+
+        print(f"Found {len(available_image_timestamps_and_folders)} image folders within the selected time range for {target_date_display_str}.")
+
+        # Generate images for each found timestamped folder
+        for timestamp_dt, folder_path in available_image_timestamps_and_folders:
+            base_image_path_for_this_timestamp = os.path.join(folder_path, 'cropped', 'tamil_nadu_cropped.png')
+            
+            img_pil = None
+            img_np = None
+            
+            try:
+                img_pil = Image.open(base_image_path_for_this_timestamp).convert("RGB")
+                img_np = np.array(img_pil)
+                height, width, _ = img_np.shape
+                transform = from_bounds(FINAL_MIN_LON, FINAL_MIN_LAT, FINAL_MAX_LON, FINAL_MAX_LAT, width, height)
+
+                current_image_set = {
+                    'timestamp': timestamp_dt,
+                    'cropped_tn': None,
+                    'masked_district': None, # Renamed from masked_coimbatore for clarity
+                    'aligned_overlay_tn': None,
+                }
+
+                # 1. Generate Cropped Tamil Nadu (Radar Only)
+                buffer = io.BytesIO()
+                img_pil.save(buffer, format="PNG")
+                current_image_set['cropped_tn'] = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
+                buffer.close()
+
+                # 2. Generate Masked District Image
+                # This part now always attempts to generate the masked image for the selected district
+                # If 'All Districts' is selected, it will default to the full cropped TN image as before
+                if selected_district == 'All Districts' or gdf_tn.empty:
+                    current_image_set['masked_district'] = current_image_set['cropped_tn']
+                else:
                     district_rows_for_name = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
                     if not district_rows_for_name.empty:
                         all_district_geometries = district_rows_for_name.geometry.to_list()
@@ -255,63 +252,51 @@ def report_view(request):
 
                         buffer = io.BytesIO()
                         Image.fromarray(cropped_district_img_np).save(buffer, format="PNG")
-                        masked_district_image_b64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
+                        current_image_set['masked_district'] = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
                         buffer.close()
-                        print(f"Generated Base64 for Masked '{selected_district}' image.")
                     else:
-                        print(f"Warning: District '{selected_district}' not found in shapefile for masked image generation.")
-            else:
-                print(f"Masked image generation skipped: specific district not selected or not applicable for current view.")
+                        print(f"Warning: District '{selected_district}' not found in shapefile for masked image generation at {timestamp_dt}.")
+                        current_image_set['masked_district'] = None # Or provide a placeholder/error image
 
+                # 3. Generate Overall TN Map with District Outlines (and highlighted district)
+                fig, ax = plt.subplots(figsize=(10, 10))
+                ax.imshow(img_np, extent=[FINAL_MIN_LON, FINAL_MAX_LON, FINAL_MIN_LAT, FINAL_MAX_LAT])
+                gdf_tn.boundary.plot(ax=ax, edgecolor='black', linewidth=0.5)
 
-            # 3. Generate Overall TN Map with District Outlines (and highlighted district)
-            fig, ax = plt.subplots(figsize=(10, 10))
-            ax.imshow(img_np, extent=[FINAL_MIN_LON, FINAL_MAX_LON, FINAL_MIN_LAT, FINAL_MAX_LAT])
-            gdf_tn.boundary.plot(ax=ax, edgecolor='black', linewidth=0.5)
-
-            if selected_district != 'All Districts':
-                district_rows_for_name_for_highlight = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
-                if not district_rows_for_name_for_highlight.empty:
-                    district_rows_for_name_for_highlight.boundary.plot(ax=ax, edgecolor='cyan', linewidth=2, linestyle='--', label=selected_district)
-                    ax.set_title(f"Aligned Screenshot with {selected_district} Highlighted")
-                    ax.legend()
+                if selected_district != 'All Districts':
+                    district_rows_for_name_for_highlight = gdf_tn[gdf_tn['NAME_2'].str.lower() == selected_district.lower()]
+                    if not district_rows_for_name_for_highlight.empty:
+                        district_rows_for_name_for_highlight.boundary.plot(ax=ax, edgecolor='cyan', linewidth=2, linestyle='--', label=selected_district)
+                        ax.set_title(f"Aligned Screenshot with {selected_district} Highlighted ({timestamp_dt.strftime('%H:%M')})")
+                        ax.legend()
+                    else:
+                        ax.set_title(f"Aligned Screenshot (District '{selected_district}' not found for highlight) ({timestamp_dt.strftime('%H:%M')})")
                 else:
-                    ax.set_title(f"Aligned Screenshot (District '{selected_district}' not found for highlight)")
-            else:
-                ax.set_title("Aligned Screenshot with All TN District Outlines")
+                    ax.set_title(f"Aligned Screenshot with All TN District Outlines ({timestamp_dt.strftime('%H:%M')})")
 
-            ax.set_xlabel("Longitude")
-            ax.set_ylabel("Latitude")
-            ax.set_aspect('equal')
-            plt.tight_layout()
+                ax.set_xlabel("Longitude")
+                ax.set_ylabel("Latitude")
+                ax.set_aspect('equal')
+                plt.tight_layout()
 
-            buffer = io.BytesIO()
-            plt.savefig(buffer, format="PNG", bbox_inches='tight', pad_inches=0.1)
-            aligned_overlay_tn_b64 = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
-            buffer.close()
-            plt.close(fig)
-            print(f"Generated Base64 for Aligned Overlay TN image.")
+                buffer = io.BytesIO()
+                plt.savefig(buffer, format="PNG", bbox_inches='tight', pad_inches=0.1)
+                current_image_set['aligned_overlay_tn'] = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode('utf-8')
+                buffer.close()
+                plt.close(fig)
+                
+                generated_images_for_display.append(current_image_set)
 
-        except FileNotFoundError as fnfe:
-            print(f"CRITICAL ERROR (Image/Shapefile): {fnfe}")
-            print(f"Please ensure '{BASE_MAP_IMAGE_SOURCE_FOR_THIS_RUN}' and '{SHAPEFILE_PATH}' exist and are accessible.")
-            cropped_tn_image_b64 = None
-            masked_district_image_b64 = None
-            aligned_overlay_tn_b64 = None
-        except Exception as e:
-            print(f"An unexpected error occurred during image generation: {e}")
-            cropped_tn_image_b64 = None
-            masked_district_image_b64 = None
-            aligned_overlay_tn_b64 = None
+            except FileNotFoundError:
+                print(f"Warning: Base map image '{base_image_path_for_this_timestamp}' not found for {timestamp_dt}. Skipping this timestamp for images.")
+            except Exception as e:
+                print(f"An unexpected error occurred during image generation for {timestamp_dt}: {e}")
+            finally:
+                if 'fig' in locals() and fig: # Ensure figure is closed even on error
+                    plt.close(fig)
+                
     else:
-        print(f"Image generation skipped: Base image or shapefile not loaded successfully.")
-
-
-    image_urls = {
-        'cropped_tn': cropped_tn_image_b64,
-        'masked_coimbatore': masked_district_image_b64, 
-        'aligned_overlay_tn': aligned_overlay_tn_b64,
-    }
+        print(f"Image generation skipped: Base media directory or shapefile not loaded successfully.")
 
     # --- Filtering CloudAnalysis data ---
     cloud_analysis_query = CloudAnalysis.objects.filter(
@@ -365,7 +350,7 @@ def report_view(request):
 
 
     context = {
-        'image_urls': image_urls,
+        'generated_images_for_display': generated_images_for_display, # Pass the list of image sets
         'selected_date': filter_date.strftime('%Y-%m-%d'),
         'selected_district': selected_district,
         'available_districts': full_available_districts,
