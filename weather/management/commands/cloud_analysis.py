@@ -10,14 +10,13 @@ from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from webdriver_manager.chrome import ChromeDriverManager
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timedelta # Import timedelta
 import os
 import time
 import json
 from django.template.loader import render_to_string
 
-# CHANGED: Replaced 'weasyprint' import with 'xhtml2pdf'
-from xhtml2pdf import pisa # Import pisa for xhtml2pdf
+from xhtml2pdf import pisa
 
 import geopandas as gpd
 import numpy as np
@@ -34,39 +33,32 @@ class Command(BaseCommand):
     BLUE_DOT_XPATH = '//*[@id="leaflet-map"]/div[1]/div[4]/div[2]'
     API_ENDPOINT_URL = "http://172.16.7.118:8003/api/tamilnadu/satellite/push.windy_radar_data.php"
 
-    # NEW: Link callback function for xhtml2pdf to handle image paths
     def _link_callback(self, uri, rel):
         """
         Convert HTML URIs to absolute system paths so xhtml2pdf can access them.
         This is crucial for local images specified with 'file:///' protocol.
         """
-        # Our images are stored with absolute 'file:///' paths
         if uri.startswith('file:///'):
-            # Remove the 'file:///' prefix to get the absolute system path
             return uri[len('file:///'):]
         
-        # This part handles Django's static/media URLs, though not strictly needed for your current image paths
-        # but good practice for a general link callback.
-        sUrl = settings.STATIC_URL        # Typically /static/
-        sRoot = settings.STATIC_ROOT      # Absolute path to STATIC_ROOT
-        mUrl = settings.MEDIA_URL         # Typically /media/
-        mRoot = settings.MEDIA_ROOT       # Absolute path to MEDIA_ROOT
+        sUrl = settings.STATIC_URL
+        sRoot = settings.STATIC_ROOT
+        mUrl = settings.MEDIA_URL
+        mRoot = settings.MEDIA_ROOT
 
         if uri.startswith(mUrl):
             path = os.path.join(mRoot, uri.replace(mUrl, ""))
         elif uri.startswith(sUrl):
             path = os.path.join(sRoot, uri.replace(sUrl, ""))
         else:
-            return uri # Return original URI for other types (e.g., external HTTP links)
+            return uri
 
-        # Ensure the path exists for local files
         if os.path.exists(path):
             return path
         else:
             self.stderr.write(self.style.WARNING(f"Warning: Linked file not found: {path} for URI: {uri}"))
-            return uri # Fallback to original URI if path doesn't exist
+            return uri
 
-    # CHANGED: PDF Generation Helper now uses xhtml2pdf
     def _generate_and_save_automation_pdf(self, results_data, current_time, base_folder,
                                            full_screenshot_path_abs, cropped_screenshot_path_abs,
                                            json_output_content):
@@ -74,32 +66,56 @@ class Command(BaseCommand):
         Generates a PDF report for a single automation run using xhtml2pdf and saves it to a file.
         """
         pdf_filename = f"automation_report_{current_time.strftime('%Y%m%d_%H%M%S')}.pdf"
-        pdf_output_path = os.path.join(base_folder, pdf_filename) # Save in the same timestamped folder
+        pdf_output_path = os.path.join(base_folder, pdf_filename)
 
         context = {
             'current_time': current_time,
             'current_run_results': results_data,
-            # Ensure these paths are absolute and accessible by the PDF renderer
-            'full_screenshot_path_abs': full_screenshot_path_abs,
-            'cropped_screenshot_path_abs': cropped_screenshot_path_abs,
+            'full_screenshot_path_abs': f'file:///{full_screenshot_path_abs.replace(os.path.sep, "/")}', # Ensure file:/// format for PDF
+            'cropped_screenshot_path_abs': f'file:///{cropped_screenshot_path_abs.replace(os.path.sep, "/")}', # Ensure file:/// format for PDF
             'json_output_content': json_output_content,
         }
 
-        # Render the HTML template
         html_string = render_to_string('weather/automation_report_pdf.html', context)
 
-        # Generate PDF using xhtml2pdf and save to target file
         with open(pdf_output_path, "wb") as pdf_file:
-            # CreatePDF returns a status object; check for errors
             pisa_status = pisa.CreatePDF(
-                html_string,          # the HTML to convert
-                dest=pdf_file,        # file handle to receive result
-                link_callback=self._link_callback # Important for local images
+                html_string,
+                dest=pdf_file,
+                link_callback=self._link_callback
             )
 
         if pisa_status.err:
             raise Exception(f"PDF generation error with xhtml2pdf: {pisa_status.err}")
-    # --- END NEW METHOD ---
+
+    # NEW: Function to round datetime to nearest N minutes
+    def _round_to_nearest_minutes(self, dt_object, minutes=15):
+        """
+        Rounds a datetime object to the nearest specified number of minutes.
+        E.g., for 15 minutes:
+        10:00:00 -> 10:00:00
+        10:07:29 -> 10:00:00
+        10:07:30 -> 10:15:00 (rounds up at half the interval, i.e., 7 minutes 30 seconds)
+        10:22:29 -> 10:15:00
+        10:22:30 -> 10:30:00
+        """
+        # Calculate the total minutes from the start of the day
+        total_minutes = dt_object.hour * 60 + dt_object.minute + dt_object.second / 60.0
+        
+        # Calculate the number of `minutes` intervals passed since midnight
+        # and then round to the nearest interval
+        rounded_total_minutes = round(total_minutes / minutes) * minutes
+
+        # Calculate the difference in minutes to adjust
+        diff_minutes = rounded_total_minutes - total_minutes
+        
+        # Apply the difference to the original datetime object
+        rounded_dt = dt_object + timedelta(minutes=diff_minutes)
+
+        # Truncate seconds and microseconds to zero for a clean rounded time
+        rounded_dt = rounded_dt.replace(second=0, microsecond=0)
+        
+        return rounded_dt
 
 
     def handle(self, **kwargs):
@@ -135,7 +151,14 @@ class Command(BaseCommand):
             self.stdout.write("STARTING NEW 15-MINUTE CYCLE: Capturing fresh screenshot and performing initial analysis.")
             self.stdout.write("="*50 + "\n")
 
-            current_time = datetime.now()
+            current_raw_time = datetime.now() # Capture the exact current time
+            
+            # --- NEW: Round the current_raw_time to the nearest 15 minutes ---
+            current_time = self._round_to_nearest_minutes(current_raw_time, minutes=15)
+            self.stdout.write(f"Raw capture time: {current_raw_time.strftime('%Y-%m-%d %H:%M:%S.%f')}")
+            self.stdout.write(self.style.SUCCESS(f"Rounded analysis time: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"))
+            # --- END NEW ---
+
             timestamp_str = current_time.strftime('%Y-%m-%d_%H-%M-%S')
 
             base_folder = os.path.join(settings.BASE_DIR, "images", timestamp_str)
@@ -191,21 +214,8 @@ class Command(BaseCommand):
                     time.sleep(1)
                 except Exception as e:
                     self.stdout.write(f"FAILED to hide dot via JavaScript at XPath '{self.BLUE_DOT_XPATH}': {e}.")
-                    # CHANGED MESSAGE HERE:
                     self.stdout.write("The element might not be present by this XPath, or another issue occurred. Trying fallback interactive methods (ESC key only)...")
 
-                    # --- REMOVED THE FOLLOWING BLOCK FOR "CLICK ON MAP" ---
-                    # try:
-                    #     self.stdout.write("Fallback 1: Trying to click on map canvas to dismiss dot.")
-                    #     map_canvas = wait.until(EC.presence_of_element_located((By.ID, 'leaflet-map')))
-                    #     ActionChains(driver).move_to_element_with_offset(map_canvas, 100, 100).click().perform()
-                    #     self.stdout.write("Clicked on a general map area to dismiss dot.")
-                    #     time.sleep(1)
-                    # except Exception as click_e:
-                    #     self.stdout.write(f"Fallback 1 (click on map) failed: {click_e}. Trying next method.")
-                    # --- END REMOVED BLOCK ---
-
-                    # CHANGED MESSAGE HERE:
                     try:
                         self.stdout.write("Fallback: Trying to press ESC key.")
                         ActionChains(driver).send_keys(Keys.ESCAPE).perform()
@@ -321,6 +331,7 @@ class Command(BaseCommand):
                             if label:
                                 matched_colors.add(label)
 
+                    # Use the rounded 'current_time' for the database
                     timestamp_for_db = current_time 
                     color_text = ", ".join(sorted(matched_colors)) if matched_colors else "No significant cloud levels found for precipitation"
                     self.stdout.write(f"Analysis for {district_name}: {color_text}")
@@ -340,7 +351,8 @@ class Command(BaseCommand):
                         "city": district_name,
                         "values": color_text,
                         "type": "Weather radar",
-                        "timestamp": timestamp_for_db.strftime('%Y-%m-%d %H:%M:%S')
+                        # Format for JSON/API as desired, using the rounded time
+                        "timestamp": timestamp_for_db.strftime('%Y-%m-%d %H:%M:%S') 
                     }
                     current_run_results.append(district_data_for_post_collection)
             
@@ -365,9 +377,10 @@ class Command(BaseCommand):
             # --- Generate and Save PDF Report for this cycle ---
             self.stdout.write("Generating PDF report for this run...")
             try:
+                # Pass the rounded current_time to PDF generation
                 self._generate_and_save_automation_pdf(
                     current_run_results,
-                    current_time,
+                    current_time, 
                     base_folder,
                     full_screenshot_path,
                     cropped_screenshot_path,
